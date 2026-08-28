@@ -83,42 +83,54 @@ async function tikwmRequest(target,hd=0){
   return normalizeTikwmData(json,target);
 }
 
+async function tdownRequest(target){
+  const endpoint=`https://tdownv4.sl-bjs.workers.dev/?down=${encodeURIComponent(target)}`;
+  const resp=await fetch(endpoint,{redirect:'follow',headers:{'Accept':'application/json, text/plain, */*','User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36'},signal:AbortSignal.timeout(30000)});
+  const text=await resp.text();
+  if(!resp.ok)throw new Error(`TDown HTTP ${resp.status}`);
+  let json;try{json=JSON.parse(text)}catch{throw new Error(`TDown invalid JSON: ${text.slice(0,120)}`)}
+  const mediaUrl=json.download_url||json.downloadUrl||json.video_url||json.url||json.data?.download_url||json.data?.url||null;
+  if(!mediaUrl)throw new Error(json.error||json.message||'TDown returned no media URL');
+  return {ok:true,title:json.title||json.author?.nickname||'TikTok video',thumbnail:json.thumbnail||json.cover||null,type:'video',filesize:null,width:null,height:null,ext:'mp4',url:mediaUrl,items:[{url:mediaUrl,title:json.title||'TikTok video',thumbnail:json.thumbnail||json.cover||null,size:null,format:'MP4',resolution:''}],sourceUrl:target,provider:'tdown'};
+}
+
 async function tikwmInfo(source){
   let lastError=null;
-  // Do not make several TikWM requests back-to-back: the free API is rate-limited.
-  // It accepts vt/vm short links directly, so try the original URL first.
   try{return await tikwmRequest(source,0)}catch(e){lastError=e}
-  await sleep(1200);
+  await sleep(1000);
   const resolved=await resolveTikTokUrl(source);
   if(resolved!==source){
     try{return await tikwmRequest(resolved,0)}catch(e){lastError=e}
-    await sleep(1200);
+    await sleep(1000);
     try{return await tikwmRequest(resolved,1)}catch(e){lastError=e}
   }else{
     try{return await tikwmRequest(source,1)}catch(e){lastError=e}
   }
-  throw lastError||new Error('TikTok unavailable');
+  throw lastError||new Error('TikWM unavailable');
 }
 
 async function tiktokInfo(source){
-  try{return await tikwmInfo(source)}catch(primaryError){
-    console.error('[tiktok:tikwm]',primaryError?.message||primaryError);
-    const resolved=await resolveTikTokUrl(source);
-    try{
-      const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates','--socket-timeout','20',resolved],{timeout:45000}));
-      if(info.duration>MAX_DURATION)throw new Error('too long');
-      return safeInfo(info,source);
-    }catch(fallbackError){
-      console.error('[tiktok:yt-dlp]',fallbackError?.message||fallbackError);
-      throw new Error(`TikTok unavailable: ${fallbackError?.message||primaryError?.message||'unknown error'}`);
-    }
+  let errors=[];
+  // Use an independent public extractor first. TikTok's web extractor has
+  // known intermittent failures even on current yt-dlp versions.
+  try{return await tdownRequest(source)}catch(e){errors.push(`tdown: ${e?.message||e}`)}
+  try{return await tikwmInfo(source)}catch(e){errors.push(`tikwm: ${e?.message||e}`)}
+  const resolved=await resolveTikTokUrl(source);
+  try{
+    const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates','--socket-timeout','20',resolved],{timeout:45000}));
+    if(info.duration>MAX_DURATION)throw new Error('too long');
+    return safeInfo(info,source);
+  }catch(e){
+    errors.push(`yt-dlp: ${e?.message||e}`);
+    console.error('[tiktok:all]',errors.join(' | '));
+    throw new Error(`TikTok extraction failed: ${errors.join(' | ')}`);
   }
 }
 
 function telegramPath(u){
   const parts=u.pathname.split('/').filter(Boolean);if(parts[0]==='s')parts.shift();if(parts.length<2)return null;
   const channel=parts[0].replace(/^@/,'');const id=parts[1];
-  if(!/^[A-Za-z0-9_]+$/.test(channel)||!/^[0-9]+$/.test(id))return null;return {channel,id};
+  if(!/^[A-Za-z0-9_]+$/.test(channel)||!^[0-9]+$/.test(id))return null;return {channel,id};
 }
 
 async function telegramInfo(source){
@@ -161,8 +173,7 @@ app.post('/api/resolve',async(q,r)=>{
     return r.json(await instagramInfo(source));
   }catch(e){
     console.error('[resolve]',parsed.site,e?.stack||e);
-    // Keep the normal UI message, but expose a short diagnostic field for debugging.
-    r.status(422).json({error:'Не удалось получить публичное медиа. Проверьте ссылку и доступность публикации.',diagnostic:String(e?.message||e).slice(0,300)});
+    r.status(422).json({error:'Не удалось получить публичное медиа. Проверьте ссылку и доступность публикации.',diagnostic:String(e?.message||e).slice(0,700)});
   }
 });
 
@@ -198,4 +209,5 @@ app.get('/',async(q,r)=>{
     r.type('html').send(html.replace('</head>',fix+'</head>'));
   }catch{r.status(500).send('Application unavailable')}
 });
+
 app.listen(PORT,'0.0.0.0',()=>console.log('Drop listening on '+PORT));
