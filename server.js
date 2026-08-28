@@ -27,23 +27,94 @@ function parseUrl(value){
     return null;
   }catch{return null}
 }
-function ytdlp(args){
+
+function ytdlp(args,{timeout=45000}={}){
   return new Promise((resolve,reject)=>{
     const p=spawn('yt-dlp',args,{stdio:['ignore','pipe','pipe']});
-    let out='',err='';
+    let out='',err='',done=false;
+    const timer=setTimeout(()=>{
+      if(done)return;
+      done=true;
+      try{p.kill('SIGTERM')}catch{}
+      reject(new Error('yt-dlp timeout'));
+    },timeout);
     p.stdout.on('data',d=>out+=d);
     p.stderr.on('data',d=>err+=d);
-    p.on('error',reject);
-    p.on('close',c=>c===0?resolve(out):reject(new Error(err.trim().split('\n').slice(-1)[0]||'media unavailable')));
+    p.on('error',e=>{if(done)return;done=true;clearTimeout(timer);reject(e)});
+    p.on('close',c=>{
+      if(done)return;
+      done=true;clearTimeout(timer);
+      c===0?resolve(out):reject(new Error(err.trim().split('\n').slice(-1)[0]||'media unavailable'));
+    });
   });
 }
+
 function name(s){return(s||'drop-media').replace(/[^a-z0-9._-]+/gi,'_').slice(0,80)||'drop-media'}
+
 function safeInfo(info,sourceUrl){
   const filesize=info.filesize||info.filesize_approx||null;
   const mediaUrl=info.url||null;
   const ext=info.ext||'mp4';
   return {ok:true,title:info.title||'Media',thumbnail:info.thumbnail||null,type:info._type||'video',filesize,width:info.width||null,height:info.height||null,ext,url:mediaUrl,items:mediaUrl?[{url:mediaUrl,title:info.title||'Media',thumbnail:info.thumbnail||null,size:filesize,format:ext,resolution:info.width&&info.height?`${info.width}×${info.height}`:''}]:[],sourceUrl};
 }
+
+function tikTokShortLink(source){
+  try{
+    const h=new URL(source).hostname.toLowerCase();
+    return h==='vm.tiktok.com'||h==='vt.tiktok.com'||h==='m.tiktok.com';
+  }catch{return false}
+}
+
+async function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+
+async function tikwmInfo(source){
+  let lastError=null;
+  for(let attempt=0;attempt<2;attempt++){
+    if(attempt===1&&tikTokShortLink(source))await sleep(3500);
+    try{
+      const body=new URLSearchParams({url:source,hd:'1'});
+      const resp=await fetch('https://www.tikwm.com/api/',{
+        method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','User-Agent':'Mozilla/5.0'},
+        body,
+        signal:AbortSignal.timeout(20000)
+      });
+      if(!resp.ok)throw new Error(`TikWM HTTP ${resp.status}`);
+      const json=await resp.json();
+      if(json.code!==0||!json.data)throw new Error(json.msg||'TikWM unavailable');
+      const d=json.data;
+      const mediaUrl=d.hdplay||d.play||d.wmplay||null;
+      if(!mediaUrl)throw new Error('TikWM returned no media URL');
+      if(Number(d.duration)>MAX_DURATION)throw new Error('too long');
+      return {
+        ok:true,
+        title:d.title||'TikTok video',
+        thumbnail:d.cover||d.origin_cover||null,
+        type:'video',
+        filesize:Number(d.hd_size||d.size||0)||null,
+        width:null,
+        height:null,
+        ext:'mp4',
+        url:mediaUrl,
+        items:[{url:mediaUrl,title:d.title||'TikTok video',thumbnail:d.cover||d.origin_cover||null,size:Number(d.hd_size||d.size||0)||null,format:'MP4',resolution:''}],
+        sourceUrl:source,
+        provider:'tikwm'
+      };
+    }catch(e){lastError=e}
+  }
+  throw lastError||new Error('TikTok unavailable');
+}
+
+async function tiktokInfo(source){
+  try{
+    const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates','--socket-timeout','20',source],{timeout:30000}));
+    if(info.duration>MAX_DURATION)throw new Error('too long');
+    return safeInfo(info,source);
+  }catch(primaryError){
+    return await tikwmInfo(source);
+  }
+}
+
 function telegramPath(u){
   const parts=u.pathname.split('/').filter(Boolean);
   if(parts[0]==='s')parts.shift();
@@ -53,11 +124,12 @@ function telegramPath(u){
   if(!/^[A-Za-z0-9_]+$/.test(channel)||!/^[0-9]+$/.test(id))return null;
   return {channel,id};
 }
+
 async function telegramInfo(source){
   const p=telegramPath(source);
   if(!p)throw new Error('invalid telegram link');
   const embed=`https://t.me/${p.channel}/${p.id}?embed=1`;
-  const resp=await fetch(embed,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0 (compatible; Drop/1.0)'}});
+  const resp=await fetch(embed,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0 (compatible; Drop/1.0)'},signal:AbortSignal.timeout(20000)});
   if(!resp.ok)throw new Error('telegram unavailable');
   const html=await resp.text();
   const get=(re)=>{const m=html.match(re);return m?m[1].replace(/&amp;/g,'&').replace(/&#x2F;/g,'/'):null};
@@ -67,6 +139,24 @@ async function telegramInfo(source){
   if(!video&&!image)throw new Error('telegram media unavailable');
   return {ok:true,title,thumbnail:image||null,type:video?'video':'image',filesize:null,width:null,height:null,ext:video?'mp4':'jpg',url:video||image,items:[{url:video||image,title,thumbnail:image||null,size:null,format:video?'MP4':'JPG',resolution:''}],sourceUrl:source};
 }
+
+async function instagramInfo(source){
+  const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates','--socket-timeout','20',source],{timeout:45000}));
+  if(info.duration>MAX_DURATION)throw new Error('too long');
+  return safeInfo(info,source);
+}
+
+async function fetchToResponse(url,r,filenameFallback='drop-media.mp4'){
+  const media=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0'},redirect:'follow',signal:AbortSignal.timeout(30000)});
+  if(!media.ok||!media.body)throw new Error(`media HTTP ${media.status}`);
+  const type=media.headers.get('content-type')||'application/octet-stream';
+  const length=Number(media.headers.get('content-length')||0);
+  if(length>MAX_BYTES)throw new Error('too large');
+  r.setHeader('Content-Type',type);
+  r.setHeader('Content-Disposition',`attachment; filename="${name(filenameFallback)}"`);
+  return Readable.fromWeb(media.body).pipe(r);
+}
+
 app.get('/health',(q,r)=>r.json({ok:true,service:'drop'}));
 
 app.post('/api/resolve',async(q,r)=>{
@@ -75,10 +165,10 @@ app.post('/api/resolve',async(q,r)=>{
   if(!parsed)return r.status(400).json({error:'Поддерживаются HTTPS-ссылки TikTok, Instagram и публичных Telegram-постов.'});
   try{
     if(parsed.site==='telegram')return r.json(await telegramInfo(source));
-    const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates',source]));
-    if(info.duration>MAX_DURATION)return r.status(413).json({error:'Видео длиннее 15 минут не поддерживается.'});
-    r.json(safeInfo(info,source));
+    if(parsed.site==='tiktok')return r.json(await tiktokInfo(source));
+    return r.json(await instagramInfo(source));
   }catch(e){
+    console.error('[resolve]',parsed.site,e?.message||e);
     r.status(422).json({error:'Не удалось получить публичное медиа. Проверьте ссылку и доступность публикации.'});
   }
 });
@@ -90,6 +180,11 @@ app.get('/api/preview',async(q,r)=>{
   try{
     if(parsed.site==='telegram'){
       const info=await telegramInfo(source);
+      if(!info.url)return r.status(422).send('Preview unavailable');
+      return r.redirect(info.url);
+    }
+    if(parsed.site==='tiktok'){
+      const info=await tiktokInfo(source);
       if(!info.url)return r.status(422).send('Preview unavailable');
       return r.redirect(info.url);
     }
@@ -110,21 +205,24 @@ app.get('/api/download',async(q,r)=>{
   if(parsed.site==='telegram'){
     try{
       const info=await telegramInfo(source);
-      const media=await fetch(info.url,{headers:{'User-Agent':'Mozilla/5.0'}});
-      if(!media.ok||!media.body)throw new Error('media unavailable');
-      const type=media.headers.get('content-type')||'application/octet-stream';
-      const ext=type.includes('image')?'jpg':'mp4';
-      r.setHeader('Content-Type',type);
-      r.setHeader('Content-Disposition',`attachment; filename="${name(info.title||'telegram-media')}.${ext}"`);
-      return Readable.fromWeb(media.body).pipe(r);
+      return await fetchToResponse(info.url,r,`${info.title||'telegram-media'}.${info.ext||'mp4'}`);
     }catch(e){return r.status(422).send('Download unavailable')}
+  }
+  if(parsed.site==='tiktok'){
+    try{
+      const info=await tiktokInfo(source);
+      return await fetchToResponse(info.url,r,`${info.title||'tiktok-video'}.mp4`);
+    }catch(e){
+      console.error('[download:tiktok]',e?.message||e);
+      return r.status(422).send('Download unavailable');
+    }
   }
   const dir=await mkdtemp(path.join(tmpdir(),'drop-'));
   const out=path.join(dir,crypto.randomUUID()+'.%(ext)s');
   try{
-    const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--no-warnings','--no-check-certificates',source]));
+    const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--no-warnings','--no-check-certificates','--socket-timeout','20',source],{timeout:45000}));
     if(info.duration>MAX_DURATION)throw new Error('too long');
-    await ytdlp(['--no-playlist','--no-warnings','--no-check-certificates','--no-mtime','--retries','2','--fragment-retries','2','--socket-timeout','20','-N','8','-f','bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b','--merge-output-format','mp4','-o',out,source]);
+    await ytdlp(['--no-playlist','--no-warnings','--no-check-certificates','--no-mtime','--retries','2','--fragment-retries','2','--socket-timeout','20','-N','8','-f','bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b','--merge-output-format','mp4','-o',out,source],{timeout:180000});
     const files=await readdir(dir),file=files.find(f=>!f.endsWith('.part'));
     if(!file)throw new Error('no file');
     const full=path.join(dir,file),s=await stat(full);
@@ -132,6 +230,7 @@ app.get('/api/download',async(q,r)=>{
     r.download(full,name((info.title||'drop-media')+'.mp4'),async()=>rm(dir,{recursive:true,force:true}));
   }catch(e){
     await rm(dir,{recursive:true,force:true});
+    console.error('[download:instagram]',e?.message||e);
     if(!r.headersSent)r.status(422).send('Download unavailable');
   }
 });
