@@ -5,6 +5,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
 COPY . .
+RUN node patch-server.mjs
 ENV NODE_ENV=production
 ENV PORT=10000
 EXPOSE 10000
