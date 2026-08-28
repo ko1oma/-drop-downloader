@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import {spawn} from 'node:child_process';
-import {mkdtemp,rm,stat,readdir} from 'node:fs/promises';
+import {mkdtemp,rm,stat,readdir,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -14,7 +14,7 @@ const PUBLIC=path.join(ROOT,'public');
 const MAX_BYTES=200*1024*1024, MAX_DURATION=15*60;
 app.use(cors());
 app.use(express.json({limit:'32kb'}));
-app.use(express.static(PUBLIC));
+app.use(express.static(PUBLIC,{index:false}));
 
 function validUrl(value){
   try{
@@ -86,5 +86,12 @@ app.get('/api/download',async(q,r)=>{
   }
 });
 
-app.get('/',(q,r)=>r.sendFile(path.join(PUBLIC,'index.html')));
+app.get('/',async(q,r)=>{
+  try{
+    const html=await readFile(path.join(PUBLIC,'index.html'),'utf8');
+    r.type('html').send(html.replace('</head>','<link rel="stylesheet" href="/mobile-fix.css?v=2"></head>'));
+  }catch{
+    r.status(500).send('Application unavailable');
+  }
+});
 app.listen(PORT,'0.0.0.0',()=>console.log('Drop listening on '+PORT));
