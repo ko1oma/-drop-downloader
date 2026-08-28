@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import {Readable} from 'node:stream';
 import {spawn} from 'node:child_process';
 import {mkdtemp,rm,stat,readdir,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -115,7 +116,7 @@ app.get('/api/download',async(q,r)=>{
       const ext=type.includes('image')?'jpg':'mp4';
       r.setHeader('Content-Type',type);
       r.setHeader('Content-Disposition',`attachment; filename="${name(info.title||'telegram-media')}.${ext}"`);
-      return media.body.pipeTo(WritableStream.prototype).catch(()=>{});
+      return Readable.fromWeb(media.body).pipe(r);
     }catch(e){return r.status(422).send('Download unavailable')}
   }
   const dir=await mkdtemp(path.join(tmpdir(),'drop-'));
