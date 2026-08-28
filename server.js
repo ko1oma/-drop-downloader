@@ -139,7 +139,8 @@ app.get('/api/download',async(q,r)=>{
 app.get('/',async(q,r)=>{
   try{
     const html=await readFile(path.join(PUBLIC,'index.html'),'utf8');
-    r.type('html').send(html.replace('</head>','<link rel="stylesheet" href="/mobile-fix.css?v=2"></head>'));
+    const fix=`<link rel="stylesheet" href="/mobile-fix.css?v=3"><script>document.addEventListener('click',function(e){const f=e.target.closest('.file-btn');if(f){const u=document.querySelector('#url')?.value?.trim();if(u){e.preventDefault();location.href='/api/download?url='+encodeURIComponent(u)}}const w=e.target.closest('.watch-btn');if(w){const u=document.querySelector('#url')?.value?.trim();if(u){e.preventDefault();window.open('/api/preview?url='+encodeURIComponent(u),'_blank')}}});</script>`;
+    r.type('html').send(html.replace('</head>',fix+'</head>'));
   }catch{r.status(500).send('Application unavailable')}
 });
 app.listen(PORT,'0.0.0.0',()=>console.log('Drop listening on '+PORT));
