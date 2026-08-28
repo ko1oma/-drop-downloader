@@ -1,0 +1,13 @@
+import express from 'express';
+import cors from 'cors';
+import {spawn} from 'node:child_process';
+import {mkdtemp,rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+const app=express(); const PORT=process.env.PORT||3000;
+app.use(cors()); app.use(express.json({limit:'32kb'})); app.use(express.static('public'));
+const allowed=u=>{try{const x=new URL(u);return ['tiktok.com','www.tiktok.com','vm.tiktok.com','instagram.com','www.instagram.com'].includes(x.hostname)||x.hostname.endsWith('.tiktok.com')||x.hostname.endsWith('.instagram.com')}catch{return false}};
+const run=(args,cwd)=>new Promise((resolve,reject)=>{const p=spawn('yt-dlp',args,{cwd});let out='',err='';p.stdout.on('data',d=>out+=d);p.stderr.on('data',d=>err+=d);p.on('error',reject);p.on('close',c=>c===0?resolve(out):reject(new Error(err.slice(-1800)||`yt-dlp exited ${c}`))) });
+app.get('/health',(q,s)=>s.json({ok:true,service:'drop'}));
+app.post('/api/resolve',async(q,s)=>{const url=String(q.body?.url||'').trim();if(!allowed(url))return s.status(400).json({error:'Only public TikTok and Instagram URLs are supported.'});const dir=await mkdtemp(path.join(os.tmpdir(),'drop-'));try{const raw=await run(['--no-playlist','--dump-single-json','--no-warnings',url],dir);const info=JSON.parse(raw);return s.json({platform:info.extractor_key||info.extractor||'unknown',title:info.title||'',items:info.url?[{title:info.title||'Media',url:info.url}]:[]})}catch(e){return s.status(502).json({error:'The public media could not be resolved right now.'})}finally{await rm(dir,{recursive:true,force:true}).catch(()=>{})}});
+app.listen(PORT,()=>console.log(`Drop listening on ${PORT}`));
