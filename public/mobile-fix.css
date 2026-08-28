@@ -1,76 +1,66 @@
-/* Mobile layout correction — keeps all trust badges fully inside the viewport. */
-@media (max-width: 820px){
+/* Mobile badge layout — compact, deterministic, and fully contained. */
+@media (max-width:820px){
+  html,body{width:100%;max-width:100%;overflow-x:hidden}
+
+  .shell,.downloader,.trust,.input-row,.meta,.how,.faq,.footer{
+    width:100%;max-width:100%;min-width:0;
+  }
+
+  /* Four compact pills sized as one row, with no text escaping the pill. */
   .trust{
     width:100%;
     margin:16px 0 22px;
-    display:flex;
+    display:grid;
+    grid-template-columns:55px 75px 96px minmax(0,1fr);
+    gap:6px;
     align-items:center;
-    justify-content:space-between;
-    gap:5px;
-    overflow:visible;
+    overflow:hidden;
   }
 
   .trust .badge{
     box-sizing:border-box;
-    flex:0 1 auto;
-    width:auto;
-    min-width:0;
-    max-width:none;
-    height:31px;
+    width:100%;min-width:0;max-width:100%;height:31px;
     padding:0 5px;
+    display:flex;align-items:center;justify-content:center;
     gap:3px;
     border-radius:999px;
     white-space:nowrap;
-    overflow:visible;
-    font-size:7.5px;
+    overflow:hidden;
+    font-size:8px;
     line-height:1;
-    letter-spacing:-.01em;
+    letter-spacing:-.02em;
   }
 
   .trust .badge-label{
-    display:block;
-    min-width:0;
-    width:auto;
-    max-width:none;
-    overflow:visible;
-    text-overflow:clip;
-    white-space:nowrap;
+    display:block;min-width:0;max-width:100%;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   }
 
   .trust .badge .ico{
-    width:11px;
-    height:11px;
-    flex:0 0 11px;
+    width:11px;height:11px;flex:0 0 11px;
   }
 
   .trust .badge .check{
-    width:10px;
-    height:10px;
-    flex:0 0 10px;
+    width:10px;height:10px;flex:0 0 10px;
   }
 }
 
-/* Slightly roomier sizing on wider phones such as iPhone Pro Max. */
-@media (min-width: 390px) and (max-width: 820px){
-  .trust .badge{
-    padding-inline:6px;
-    gap:4px;
-    font-size:8px;
+/* Wider phones: add only the space that is actually available. */
+@media (min-width:390px) and (max-width:820px){
+  .trust{
+    grid-template-columns:58px 78px 100px minmax(0,1fr);
+    gap:6px;
   }
-  .trust .badge .ico{
-    width:12px;
-    height:12px;
-    flex-basis:12px;
-  }
-  .trust .badge .check{
-    width:11px;
-    height:11px;
-    flex-basis:11px;
-  }
+  .trust .badge{padding-inline:5px;gap:3px;font-size:8.5px}
+  .trust .badge .ico{width:11px;height:11px;flex-basis:11px}
+  .trust .badge .check{width:10px;height:10px;flex-basis:10px}
 }
 
-/* Never allow any page-level component to create horizontal overflow. */
+/* No mobile component may create horizontal page overflow. */
 @media (max-width:820px){
-  html,body{max-width:100%;overflow-x:hidden}
-  .shell,.downloader,.trust,.input-row,.meta,.how,.faq,.footer{max-width:100%}
+  *,*::before,*::after{box-sizing:border-box}
+  .input-row,.meta,.step,.faq-list,.footer{min-width:0;max-width:100%}
+  .meta>*{min-width:0;max-width:100%}
+  .platforms,.note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .footer>*{min-width:0;max-width:100%}
 }
