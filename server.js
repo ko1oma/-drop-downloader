@@ -17,197 +17,25 @@ app.use(cors());
 app.use(express.json({limit:'32kb'}));
 app.use(express.static(PUBLIC,{index:false}));
 
-function parseUrl(value){
-  try{
-    const u=new URL(value),h=u.hostname.toLowerCase().replace(/^www\./,'');
-    if(u.protocol!=='https:')return null;
-    if(h==='tiktok.com'||h.endsWith('.tiktok.com'))return {url:u,site:'tiktok'};
-    if(h==='instagram.com'||h.endsWith('.instagram.com'))return {url:u,site:'instagram'};
-    if(h==='t.me'||h==='telegram.me'||h==='telegram.dog')return {url:u,site:'telegram'};
-    return null;
-  }catch{return null}
-}
-
-function ytdlp(args,{timeout=45000}={}){
-  return new Promise((resolve,reject)=>{
-    const p=spawn('yt-dlp',args,{stdio:['ignore','pipe','pipe']});
-    let out='',err='',done=false;
-    const timer=setTimeout(()=>{if(done)return;done=true;try{p.kill('SIGTERM')}catch{};reject(new Error('yt-dlp timeout'))},timeout);
-    p.stdout.on('data',d=>out+=d);
-    p.stderr.on('data',d=>err+=d);
-    p.on('error',e=>{if(done)return;done=true;clearTimeout(timer);reject(e)});
-    p.on('close',c=>{if(done)return;done=true;clearTimeout(timer);c===0?resolve(out):reject(new Error(err.trim().split('\n').slice(-1)[0]||'media unavailable'))});
-  });
-}
-
+function parseUrl(value){try{const u=new URL(value),h=u.hostname.toLowerCase().replace(/^www\./,'');if(u.protocol!=='https:')return null;if(h==='tiktok.com'||h.endsWith('.tiktok.com'))return {url:u,site:'tiktok'};if(h==='instagram.com'||h.endsWith('.instagram.com'))return {url:u,site:'instagram'};if(h==='t.me'||h==='telegram.me'||h==='telegram.dog')return {url:u,site:'telegram'};return null}catch{return null}}
+function ytdlp(args,{timeout=45000}={}){return new Promise((resolve,reject)=>{const p=spawn('yt-dlp',args,{stdio:['ignore','pipe','pipe']});let out='',err='',done=false;const timer=setTimeout(()=>{if(done)return;done=true;try{p.kill('SIGTERM')}catch{};reject(new Error('yt-dlp timeout'))},timeout);p.stdout.on('data',d=>out+=d);p.stderr.on('data',d=>err+=d);p.on('error',e=>{if(done)return;done=true;clearTimeout(timer);reject(e)});p.on('close',c=>{if(done)return;done=true;clearTimeout(timer);c===0?resolve(out):reject(new Error(err.trim().split('\n').slice(-1)[0]||'media unavailable'))})})}
 function name(s){return(s||'drop-media').replace(/[^a-z0-9._-]+/gi,'_').slice(0,80)||'drop-media'}
-
-function safeInfo(info,sourceUrl){
-  const filesize=info.filesize||info.filesize_approx||null;
-  const mediaUrl=info.url||null;
-  const ext=info.ext||'mp4';
-  return {ok:true,title:info.title||'Media',thumbnail:info.thumbnail||null,type:info._type||'video',filesize,width:info.width||null,height:info.height||null,ext,url:mediaUrl,items:mediaUrl?[{url:mediaUrl,title:info.title||'Media',thumbnail:info.thumbnail||null,size:filesize,format:ext,resolution:info.width&&info.height?`${info.width}×${info.height}`:''}]:[],sourceUrl};
-}
-
-function tikTokShortLink(source){
-  try{const h=new URL(source).hostname.toLowerCase();return h==='vm.tiktok.com'||h==='vt.tiktok.com'||h==='m.tiktok.com'}catch{return false}
-}
-
+function safeInfo(info,sourceUrl){const filesize=info.filesize||info.filesize_approx||null,mediaUrl=info.url||null,ext=info.ext||'mp4';return {ok:true,title:info.title||'Media',thumbnail:info.thumbnail||null,type:info._type||'video',filesize,width:info.width||null,height:info.height||null,ext,url:mediaUrl,items:mediaUrl?[{url:mediaUrl,title:info.title||'Media',thumbnail:info.thumbnail||null,size:filesize,format:ext,resolution:info.width&&info.height?`${info.width}×${info.height}`:''}]:[],sourceUrl}}
+function tikTokShortLink(source){try{const h=new URL(source).hostname.toLowerCase();return h==='vm.tiktok.com'||h==='vt.tiktok.com'||h==='m.tiktok.com'}catch{return false}}
 async function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
-
-async function resolveTikTokUrl(source){
-  if(!tikTokShortLink(source))return source;
-  try{
-    const resp=await fetch(source,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36','Accept':'text/html,application/xhtml+xml'},signal:AbortSignal.timeout(15000)});
-    const finalUrl=resp.url||source;
-    if(/^https:\/\/(www\.)?tiktok\.com\/@[^/]+\/video\/\d+/i.test(finalUrl))return finalUrl;
-  }catch{}
-  return source;
-}
-
-function normalizeTikwmData(json,source){
-  if(!json||json.code!==0||!json.data)throw new Error(json?.msg||'TikWM unavailable');
-  const d=json.data;
-  const mediaUrl=d.play||d.hdplay||d.wmplay||d.sdplay||null;
-  if(!mediaUrl)throw new Error('TikWM returned no media URL');
-  if(Number(d.duration)>MAX_DURATION)throw new Error('too long');
-  return {ok:true,title:d.title||'TikTok video',thumbnail:d.cover||d.origin_cover||null,type:'video',filesize:Number(d.size||d.hd_size||0)||null,width:Number(d.width)||null,height:Number(d.height)||null,ext:'mp4',url:mediaUrl,items:[{url:mediaUrl,title:d.title||'TikTok video',thumbnail:d.cover||d.origin_cover||null,size:Number(d.size||d.hd_size||0)||null,format:'MP4',resolution:d.width&&d.height?`${d.width}×${d.height}`:''}],sourceUrl:source,provider:'tikwm'};
-}
-
-async function tikwmRequest(target,hd=0){
-  const body=new URLSearchParams({url:target,hd:String(hd)});
-  const resp=await fetch('https://www.tikwm.com/api/',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Accept':'application/json, text/plain, */*','Accept-Language':'en-US,en;q=0.9','Referer':'https://www.tikwm.com/','User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36'},body,signal:AbortSignal.timeout(30000)});
-  const text=await resp.text();
-  if(!resp.ok)throw new Error(`TikWM HTTP ${resp.status}`);
-  let json;try{json=JSON.parse(text)}catch{throw new Error(`TikWM invalid JSON: ${text.slice(0,120)}`)}
-  return normalizeTikwmData(json,target);
-}
-
-async function tdownRequest(target){
-  const endpoint=`https://tdownv4.sl-bjs.workers.dev/?down=${encodeURIComponent(target)}`;
-  const resp=await fetch(endpoint,{redirect:'follow',headers:{'Accept':'application/json, text/plain, */*','User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36'},signal:AbortSignal.timeout(30000)});
-  const text=await resp.text();
-  if(!resp.ok)throw new Error(`TDown HTTP ${resp.status}`);
-  let json;try{json=JSON.parse(text)}catch{throw new Error(`TDown invalid JSON: ${text.slice(0,120)}`)}
-  const mediaUrl=json.download_url||json.downloadUrl||json.video_url||json.url||json.data?.download_url||json.data?.url||null;
-  if(!mediaUrl)throw new Error(json.error||json.message||'TDown returned no media URL');
-  return {ok:true,title:json.title||json.author?.nickname||'TikTok video',thumbnail:json.thumbnail||json.cover||null,type:'video',filesize:null,width:null,height:null,ext:'mp4',url:mediaUrl,items:[{url:mediaUrl,title:json.title||'TikTok video',thumbnail:json.thumbnail||json.cover||null,size:null,format:'MP4',resolution:''}],sourceUrl:target,provider:'tdown'};
-}
-
-async function tikwmInfo(source){
-  let lastError=null;
-  try{return await tikwmRequest(source,0)}catch(e){lastError=e}
-  await sleep(1000);
-  const resolved=await resolveTikTokUrl(source);
-  if(resolved!==source){
-    try{return await tikwmRequest(resolved,0)}catch(e){lastError=e}
-    await sleep(1000);
-    try{return await tikwmRequest(resolved,1)}catch(e){lastError=e}
-  }else{
-    try{return await tikwmRequest(source,1)}catch(e){lastError=e}
-  }
-  throw lastError||new Error('TikWM unavailable');
-}
-
-async function tiktokInfo(source){
-  let errors=[];
-  // Use an independent public extractor first. TikTok's web extractor has
-  // known intermittent failures even on current yt-dlp versions.
-  try{return await tdownRequest(source)}catch(e){errors.push(`tdown: ${e?.message||e}`)}
-  try{return await tikwmInfo(source)}catch(e){errors.push(`tikwm: ${e?.message||e}`)}
-  const resolved=await resolveTikTokUrl(source);
-  try{
-    const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates','--socket-timeout','20',resolved],{timeout:45000}));
-    if(info.duration>MAX_DURATION)throw new Error('too long');
-    return safeInfo(info,source);
-  }catch(e){
-    errors.push(`yt-dlp: ${e?.message||e}`);
-    console.error('[tiktok:all]',errors.join(' | '));
-    throw new Error(`TikTok extraction failed: ${errors.join(' | ')}`);
-  }
-}
-
-function telegramPath(u){
-  const parts=u.pathname.split('/').filter(Boolean);if(parts[0]==='s')parts.shift();if(parts.length<2)return null;
-  const channel=parts[0].replace(/^@/,'');const id=parts[1];
-  if(!/^[A-Za-z0-9_]+$/.test(channel)||!^[0-9]+$/.test(id))return null;return {channel,id};
-}
-
-async function telegramInfo(source){
-  const p=telegramPath(source);if(!p)throw new Error('invalid telegram link');
-  const embed=`https://t.me/${p.channel}/${p.id}?embed=1`;
-  const resp=await fetch(embed,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0 (compatible; Drop/1.0)'},signal:AbortSignal.timeout(20000)});
-  if(!resp.ok)throw new Error('telegram unavailable');
-  const html=await resp.text();
-  const get=re=>{const m=html.match(re);return m?m[1].replace(/&amp;/g,'&').replace(/&#x2F;/g,'/'):null};
-  const video=get(/<meta[^>]+property=["']og:video(?::url)?["'][^>]+content=["']([^"']+)/i)||get(/<meta[^>]+name=["']twitter:player:stream["'][^>]+content=["']([^"']+)/i)||get(/<video[^>]+src=["']([^"']+)/i);
-  const image=get(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i);
-  const title=get(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i)||`Telegram ${p.channel}`;
-  if(!video&&!image)throw new Error('telegram media unavailable');
-  return {ok:true,title,thumbnail:image||null,type:video?'video':'image',filesize:null,width:null,height:null,ext:video?'mp4':'jpg',url:video||image,items:[{url:video||image,title,thumbnail:image||null,size:null,format:video?'MP4':'JPG',resolution:''}],sourceUrl:source};
-}
-
-async function instagramInfo(source){
-  const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates','--socket-timeout','20',source],{timeout:60000}));
-  if(info.duration>MAX_DURATION)throw new Error('too long');
-  return safeInfo(info,source);
-}
-
-async function fetchToResponse(url,r,filenameFallback='drop-media.mp4'){
-  const media=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0'},redirect:'follow',signal:AbortSignal.timeout(30000)});
-  if(!media.ok||!media.body)throw new Error(`media HTTP ${media.status}`);
-  const type=media.headers.get('content-type')||'application/octet-stream';
-  const length=Number(media.headers.get('content-length')||0);if(length>MAX_BYTES)throw new Error('too large');
-  r.setHeader('Content-Type',type);r.setHeader('Content-Disposition',`attachment; filename="${name(filenameFallback)}"`);
-  return Readable.fromWeb(media.body).pipe(r);
-}
-
+async function resolveTikTokUrl(source){if(!tikTokShortLink(source))return source;try{const resp=await fetch(source,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36','Accept':'text/html,application/xhtml+xml'},signal:AbortSignal.timeout(15000)});const finalUrl=resp.url||source;if(/^https:\/\/(www\.)?tiktok\.com\/@[^/]+\/video\/\d+/i.test(finalUrl))return finalUrl}catch{}return source}
+function normalizeTikwmData(json,source){if(!json||json.code!==0||!json.data)throw new Error(json?.msg||'TikWM unavailable');const d=json.data,mediaUrl=d.play||d.hdplay||d.wmplay||d.sdplay||null;if(!mediaUrl)throw new Error('TikWM returned no media URL');if(Number(d.duration)>MAX_DURATION)throw new Error('too long');return {ok:true,title:d.title||'TikTok video',thumbnail:d.cover||d.origin_cover||null,type:'video',filesize:Number(d.size||d.hd_size||0)||null,width:Number(d.width)||null,height:Number(d.height)||null,ext:'mp4',url:mediaUrl,items:[{url:mediaUrl,title:d.title||'TikTok video',thumbnail:d.cover||d.origin_cover||null,size:Number(d.size||d.hd_size||0)||null,format:'MP4',resolution:d.width&&d.height?`${d.width}×${d.height}`:''}],sourceUrl:source,provider:'tikwm'}}
+async function tikwmRequest(target,hd=0){const body=new URLSearchParams({url:target,hd:String(hd)});const resp=await fetch('https://www.tikwm.com/api/',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Accept':'application/json, text/plain, */*','Accept-Language':'en-US,en;q=0.9','Referer':'https://www.tikwm.com/','User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36'},body,signal:AbortSignal.timeout(30000)});const text=await resp.text();if(!resp.ok)throw new Error(`TikWM HTTP ${resp.status}`);let json;try{json=JSON.parse(text)}catch{throw new Error(`TikWM invalid JSON: ${text.slice(0,120)}`)}return normalizeTikwmData(json,target)}
+async function tdownRequest(target){const endpoint=`https://tdownv4.sl-bjs.workers.dev/?down=${encodeURIComponent(target)}`;const resp=await fetch(endpoint,{redirect:'follow',headers:{'Accept':'application/json, text/plain, */*','User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36'},signal:AbortSignal.timeout(30000)});const text=await resp.text();if(!resp.ok)throw new Error(`TDown HTTP ${resp.status}`);let json;try{json=JSON.parse(text)}catch{throw new Error(`TDown invalid JSON: ${text.slice(0,120)}`)}const mediaUrl=json.download_url||json.downloadUrl||json.video_url||json.url||json.data?.download_url||json.data?.url||null;if(!mediaUrl)throw new Error(json.error||json.message||'TDown returned no media URL');return {ok:true,title:json.title||json.author?.nickname||'TikTok video',thumbnail:json.thumbnail||json.cover||null,type:'video',filesize:null,width:null,height:null,ext:'mp4',url:mediaUrl,items:[{url:mediaUrl,title:json.title||'TikTok video',thumbnail:json.thumbnail||json.cover||null,size:null,format:'MP4',resolution:''}],sourceUrl:target,provider:'tdown'}}
+async function tikwmInfo(source){let lastError=null;try{return await tikwmRequest(source,0)}catch(e){lastError=e}await sleep(1000);const resolved=await resolveTikTokUrl(source);if(resolved!==source){try{return await tikwmRequest(resolved,0)}catch(e){lastError=e}await sleep(1000);try{return await tikwmRequest(resolved,1)}catch(e){lastError=e}}else{try{return await tikwmRequest(source,1)}catch(e){lastError=e}}throw lastError||new Error('TikWM unavailable')}
+async function tiktokInfo(source){const errors=[];try{return await tdownRequest(source)}catch(e){errors.push(`tdown: ${e?.message||e}`)}try{return await tikwmInfo(source)}catch(e){errors.push(`tikwm: ${e?.message||e}`)}const resolved=await resolveTikTokUrl(source);try{const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates','--socket-timeout','20',resolved],{timeout:45000}));if(info.duration>MAX_DURATION)throw new Error('too long');return safeInfo(info,source)}catch(e){errors.push(`yt-dlp: ${e?.message||e}`);console.error('[tiktok:all]',errors.join(' | '));throw new Error(`TikTok extraction failed: ${errors.join(' | ')}`)}}
+function telegramPath(u){const parts=u.pathname.split('/').filter(Boolean);if(parts[0]==='s')parts.shift();if(parts.length<2)return null;const channel=parts[0].replace(/^@/,'');const id=parts[1];if(!/^[A-Za-z0-9_]+$/.test(channel)||!/^[0-9]+$/.test(id))return null;return {channel,id}}
+async function telegramInfo(source){const p=telegramPath(source);if(!p)throw new Error('invalid telegram link');const embed=`https://t.me/${p.channel}/${p.id}?embed=1`;const resp=await fetch(embed,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0 (compatible; Drop/1.0)'},signal:AbortSignal.timeout(20000)});if(!resp.ok)throw new Error('telegram unavailable');const html=await resp.text();const get=re=>{const m=html.match(re);return m?m[1].replace(/&amp;/g,'&').replace(/&#x2F;/g,'/'):null};const video=get(/<meta[^>]+property=["']og:video(?::url)?["'][^>]+content=["']([^"']+)/i)||get(/<meta[^>]+name=["']twitter:player:stream["'][^>]+content=["']([^"']+)/i)||get(/<video[^>]+src=["']([^"']+)/i);const image=get(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i);const title=get(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i)||`Telegram ${p.channel}`;if(!video&&!image)throw new Error('telegram media unavailable');return {ok:true,title,thumbnail:image||null,type:video?'video':'image',filesize:null,width:null,height:null,ext:video?'mp4':'jpg',url:video||image,items:[{url:video||image,title,thumbnail:image||null,size:null,format:video?'MP4':'JPG',resolution:''}],sourceUrl:source}}
+async function instagramInfo(source){const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates','--socket-timeout','20',source],{timeout:60000}));if(info.duration>MAX_DURATION)throw new Error('too long');return safeInfo(info,source)}
+async function fetchToResponse(url,r,filenameFallback='drop-media.mp4'){const media=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0'},redirect:'follow',signal:AbortSignal.timeout(30000)});if(!media.ok||!media.body)throw new Error(`media HTTP ${media.status}`);const type=media.headers.get('content-type')||'application/octet-stream';const length=Number(media.headers.get('content-length')||0);if(length>MAX_BYTES)throw new Error('too large');r.setHeader('Content-Type',type);r.setHeader('Content-Disposition',`attachment; filename="${name(filenameFallback)}"`);return Readable.fromWeb(media.body).pipe(r)}
 app.get('/health',(q,r)=>r.json({ok:true,service:'drop'}));
-
-app.post('/api/resolve',async(q,r)=>{
-  const source=String(q.body?.url||'').trim();const parsed=parseUrl(source);
-  if(!parsed)return r.status(400).json({error:'Поддерживаются HTTPS-ссылки TikTok, Instagram и публичных Telegram-постов.'});
-  try{
-    if(parsed.site==='telegram')return r.json(await telegramInfo(source));
-    if(parsed.site==='tiktok')return r.json(await tiktokInfo(source));
-    return r.json(await instagramInfo(source));
-  }catch(e){
-    console.error('[resolve]',parsed.site,e?.stack||e);
-    r.status(422).json({error:'Не удалось получить публичное медиа. Проверьте ссылку и доступность публикации.',diagnostic:String(e?.message||e).slice(0,700)});
-  }
-});
-
-app.get('/api/preview',async(q,r)=>{
-  const source=String(q.query.url||'').trim();const parsed=parseUrl(source);if(!parsed)return r.status(400).send('Invalid URL');
-  try{
-    if(parsed.site==='telegram'){const info=await telegramInfo(source);if(!info.url)return r.status(422).send('Preview unavailable');return r.redirect(info.url)}
-    if(parsed.site==='tiktok'){const info=await tiktokInfo(source);if(!info.url)return r.status(422).send('Preview unavailable');return r.redirect(info.url)}
-    const p=spawn('yt-dlp',['--no-playlist','--no-warnings','--quiet','--no-check-certificates','-f','b[ext=mp4]/b','-o','-',source],{stdio:['ignore','pipe','pipe']});
-    r.setHeader('Content-Type','video/mp4');r.setHeader('Cache-Control','no-store');p.stdout.pipe(r);
-    p.on('error',()=>{if(!r.headersSent)r.status(422).end();else r.end()});p.on('close',code=>{if(code!==0&&!r.headersSent)r.status(422).end();else if(!r.writableEnded)r.end()});q.on('close',()=>{if(p&&!p.killed)p.kill('SIGTERM')});
-  }catch{if(!r.headersSent)r.status(422).send('Preview unavailable')}
-});
-
-app.get('/api/download',async(q,r)=>{
-  const source=String(q.query.url||'').trim();const parsed=parseUrl(source);if(!parsed)return r.status(400).send('Invalid URL');
-  if(parsed.site==='telegram'){try{const info=await telegramInfo(source);return await fetchToResponse(info.url,r,`${info.title||'telegram-media'}.${info.ext||'mp4'}`)}catch(e){console.error('[download:telegram]',e?.message||e);return r.status(422).send('Download unavailable')}}
-  if(parsed.site==='tiktok'){try{const info=await tiktokInfo(source);return await fetchToResponse(info.url,r,`${info.title||'tiktok-video'}.mp4`)}catch(e){console.error('[download:tiktok]',e?.message||e);return r.status(422).send('Download unavailable')}}
-  const dir=await mkdtemp(path.join(tmpdir(),'drop-'));const out=path.join(dir,crypto.randomUUID()+'.%(ext)s');
-  try{
-    const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--no-warnings','--no-check-certificates','--socket-timeout','20',source],{timeout:60000}));if(info.duration>MAX_DURATION)throw new Error('too long');
-    await ytdlp(['--no-playlist','--no-warnings','--no-check-certificates','--no-mtime','--retries','2','--fragment-retries','2','--socket-timeout','20','-N','8','-f','bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b','--merge-output-format','mp4','-o',out,source],{timeout:180000});
-    const files=await readdir(dir),file=files.find(f=>!f.endsWith('.part'));if(!file)throw new Error('no file');
-    const full=path.join(dir,file),s=await stat(full);if(s.size>MAX_BYTES)throw new Error('too large');
-    r.download(full,name((info.title||'drop-media')+'.mp4'),async()=>rm(dir,{recursive:true,force:true}));
-  }catch(e){await rm(dir,{recursive:true,force:true});console.error('[download:instagram]',e?.message||e);if(!r.headersSent)r.status(422).send('Download unavailable')}
-});
-
-app.get('/',async(q,r)=>{
-  try{
-    const html=await readFile(path.join(PUBLIC,'index.html'),'utf8');
-    const fix=`<link rel="stylesheet" href="/mobile-fix.css?v=3"><script>document.addEventListener('click',function(e){const f=e.target.closest('.file-btn');if(f){const u=document.querySelector('#url')?.value?.trim();if(u){e.preventDefault();location.href='/api/download?url='+encodeURIComponent(u)}}const w=e.target.closest('.watch-btn');if(w){const u=document.querySelector('#url')?.value?.trim();if(u){e.preventDefault();window.open('/api/preview?url='+encodeURIComponent(u),'_blank')}}});</script>`;
-    r.type('html').send(html.replace('</head>',fix+'</head>'));
-  }catch{r.status(500).send('Application unavailable')}
-});
-
+app.post('/api/resolve',async(q,r)=>{const source=String(q.body?.url||'').trim();const parsed=parseUrl(source);if(!parsed)return r.status(400).json({error:'Поддерживаются HTTPS-ссылки TikTok, Instagram и публичных Telegram-постов.'});try{if(parsed.site==='telegram')return r.json(await telegramInfo(source));if(parsed.site==='tiktok')return r.json(await tiktokInfo(source));return r.json(await instagramInfo(source))}catch(e){console.error('[resolve]',parsed.site,e?.stack||e);r.status(422).json({error:'Не удалось получить публичное медиа. Проверьте ссылку и доступность публикации.',diagnostic:String(e?.message||e).slice(0,700)})}});
+app.get('/api/preview',async(q,r)=>{const source=String(q.query.url||'').trim();const parsed=parseUrl(source);if(!parsed)return r.status(400).send('Invalid URL');try{if(parsed.site==='telegram'){const info=await telegramInfo(source);if(!info.url)return r.status(422).send('Preview unavailable');return r.redirect(info.url)}if(parsed.site==='tiktok'){const info=await tiktokInfo(source);if(!info.url)return r.status(422).send('Preview unavailable');return r.redirect(info.url)}const p=spawn('yt-dlp',['--no-playlist','--no-warnings','--quiet','--no-check-certificates','-f','b[ext=mp4]/b','-o','-',source],{stdio:['ignore','pipe','pipe']});r.setHeader('Content-Type','video/mp4');r.setHeader('Cache-Control','no-store');p.stdout.pipe(r);p.on('error',()=>{if(!r.headersSent)r.status(422).end();else r.end()});p.on('close',code=>{if(code!==0&&!r.headersSent)r.status(422).end();else if(!r.writableEnded)r.end()});q.on('close',()=>{if(p&&!p.killed)p.kill('SIGTERM')})}catch{if(!r.headersSent)r.status(422).send('Preview unavailable')}});
+app.get('/api/download',async(q,r)=>{const source=String(q.query.url||'').trim();const parsed=parseUrl(source);if(!parsed)return r.status(400).send('Invalid URL');if(parsed.site==='telegram'){try{const info=await telegramInfo(source);return await fetchToResponse(info.url,r,`${info.title||'telegram-media'}.${info.ext||'mp4'}`)}catch(e){console.error('[download:telegram]',e?.message||e);return r.status(422).send('Download unavailable')}}if(parsed.site==='tiktok'){try{const info=await tiktokInfo(source);return await fetchToResponse(info.url,r,`${info.title||'tiktok-video'}.mp4`)}catch(e){console.error('[download:tiktok]',e?.message||e);return r.status(422).send('Download unavailable')}}const dir=await mkdtemp(path.join(tmpdir(),'drop-'));const out=path.join(dir,crypto.randomUUID()+'.%(ext)s');try{const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--no-warnings','--no-check-certificates','--socket-timeout','20',source],{timeout:60000}));if(info.duration>MAX_DURATION)throw new Error('too long');await ytdlp(['--no-playlist','--no-warnings','--no-check-certificates','--no-mtime','--retries','2','--fragment-retries','2','--socket-timeout','20','-N','8','-f','bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b','--merge-output-format','mp4','-o',out,source],{timeout:180000});const files=await readdir(dir),file=files.find(f=>!f.endsWith('.part'));if(!file)throw new Error('no file');const full=path.join(dir,file),s=await stat(full);if(s.size>MAX_BYTES)throw new Error('too large');r.download(full,name((info.title||'drop-media')+'.mp4'),async()=>rm(dir,{recursive:true,force:true}))}catch(e){await rm(dir,{recursive:true,force:true});console.error('[download:instagram]',e?.message||e);if(!r.headersSent)r.status(422).send('Download unavailable')}});
+app.get('/',async(q,r)=>{try{const html=await readFile(path.join(PUBLIC,'index.html'),'utf8');const fix=`<link rel="stylesheet" href="/mobile-fix.css?v=3"><script>document.addEventListener('click',function(e){const f=e.target.closest('.file-btn');if(f){const u=document.querySelector('#url')?.value?.trim();if(u){e.preventDefault();location.href='/api/download?url='+encodeURIComponent(u)}}const w=e.target.closest('.watch-btn');if(w){const u=document.querySelector('#url')?.value?.trim();if(u){e.preventDefault();window.open('/api/preview?url='+encodeURIComponent(u),'_blank')}}});</script>`;r.type('html').send(html.replace('</head>',fix+'</head>'))}catch{r.status(500).send('Application unavailable')}});
 app.listen(PORT,'0.0.0.0',()=>console.log('Drop listening on '+PORT));
