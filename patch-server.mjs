@@ -14,8 +14,10 @@ if (!s.includes("https://api.cobalt.tools/")) {
 
 // TikTok currently requires browser-like TLS/request fingerprints in some
 // regions. curl-cffi is installed by Dockerfile, so ask yt-dlp to use it.
+// Do not override the browser UA after impersonation: curl-cffi must keep its
+// TLS fingerprint and User-Agent consistent.
 const oldYt = "'--socket-timeout','15','--user-agent',UA,source";
-const newYt = "'--socket-timeout','15','--impersonate','chrome','--extractor-args','tiktok:app_name=trill','--user-agent',UA,source";
+const newYt = "'--socket-timeout','15','--impersonate','chrome','--extractor-args','tiktok:app_name=trill',source";
 if (s.includes(oldYt) && !s.includes("'--impersonate','chrome'")) {
   s = s.replace(oldYt, newYt);
 }
