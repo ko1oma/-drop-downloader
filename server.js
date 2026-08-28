@@ -67,39 +67,64 @@ function tikTokShortLink(source){
 
 async function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
 
+async function resolveTikTokUrl(source){
+  if(!tikTokShortLink(source))return source;
+  await sleep(5000);
+  try{
+    const resp=await fetch(source,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'},signal:AbortSignal.timeout(15000)});
+    const finalUrl=resp.url||source;
+    if(/^https:\/\/(www\.)?tiktok\.com\//i.test(finalUrl))return finalUrl;
+  }catch{}
+  return source;
+}
+
+function normalizeTikwmData(json,source){
+  if(!json||json.code!==0||!json.data)throw new Error(json?.msg||'TikWM unavailable');
+  const d=json.data;
+  const mediaUrl=d.hdplay||d.play||d.wmplay||null;
+  if(!mediaUrl)throw new Error('TikWM returned no media URL');
+  if(Number(d.duration)>MAX_DURATION)throw new Error('too long');
+  return {
+    ok:true,
+    title:d.title||'TikTok video',
+    thumbnail:d.cover||d.origin_cover||null,
+    type:'video',
+    filesize:Number(d.hd_size||d.size||0)||null,
+    width:Number(d.width)||null,
+    height:Number(d.height)||null,
+    ext:'mp4',
+    url:mediaUrl,
+    items:[{url:mediaUrl,title:d.title||'TikTok video',thumbnail:d.cover||d.origin_cover||null,size:Number(d.hd_size||d.size||0)||null,format:'MP4',resolution:d.width&&d.height?`${d.width}×${d.height}`:''}],
+    sourceUrl:source,
+    provider:'tikwm'
+  };
+}
+
 async function tikwmInfo(source){
+  const resolved=await resolveTikTokUrl(source);
   let lastError=null;
-  for(let attempt=0;attempt<2;attempt++){
-    if(attempt===1&&tikTokShortLink(source))await sleep(3500);
+  const targets=[resolved,source].filter((v,i,a)=>v&&a.indexOf(v)===i);
+  for(const target of targets){
     try{
-      const body=new URLSearchParams({url:source,hd:'1'});
+      const qs=new URLSearchParams({url:target,hd:'1'});
+      const resp=await fetch(`https://www.tikwm.com/api/?${qs.toString()}`,{
+        method:'GET',
+        headers:{'Accept':'application/json','User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'},
+        signal:AbortSignal.timeout(20000)
+      });
+      if(!resp.ok)throw new Error(`TikWM HTTP ${resp.status}`);
+      return normalizeTikwmData(await resp.json(),source);
+    }catch(e){lastError=e}
+    try{
+      const body=new URLSearchParams({url:target,hd:'1'});
       const resp=await fetch('https://www.tikwm.com/api/',{
         method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','User-Agent':'Mozilla/5.0'},
+        headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Accept':'application/json','User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'},
         body,
         signal:AbortSignal.timeout(20000)
       });
       if(!resp.ok)throw new Error(`TikWM HTTP ${resp.status}`);
-      const json=await resp.json();
-      if(json.code!==0||!json.data)throw new Error(json.msg||'TikWM unavailable');
-      const d=json.data;
-      const mediaUrl=d.hdplay||d.play||d.wmplay||null;
-      if(!mediaUrl)throw new Error('TikWM returned no media URL');
-      if(Number(d.duration)>MAX_DURATION)throw new Error('too long');
-      return {
-        ok:true,
-        title:d.title||'TikTok video',
-        thumbnail:d.cover||d.origin_cover||null,
-        type:'video',
-        filesize:Number(d.hd_size||d.size||0)||null,
-        width:null,
-        height:null,
-        ext:'mp4',
-        url:mediaUrl,
-        items:[{url:mediaUrl,title:d.title||'TikTok video',thumbnail:d.cover||d.origin_cover||null,size:Number(d.hd_size||d.size||0)||null,format:'MP4',resolution:''}],
-        sourceUrl:source,
-        provider:'tikwm'
-      };
+      return normalizeTikwmData(await resp.json(),source);
     }catch(e){lastError=e}
   }
   throw lastError||new Error('TikTok unavailable');
@@ -107,11 +132,18 @@ async function tikwmInfo(source){
 
 async function tiktokInfo(source){
   try{
-    const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates','--socket-timeout','20',source],{timeout:30000}));
-    if(info.duration>MAX_DURATION)throw new Error('too long');
-    return safeInfo(info,source);
-  }catch(primaryError){
     return await tikwmInfo(source);
+  }catch(primaryError){
+    console.error('[tiktok:tikwm]',primaryError?.message||primaryError);
+    const resolved=await resolveTikTokUrl(source);
+    try{
+      const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings','--no-check-certificates','--socket-timeout','20',resolved],{timeout:30000}));
+      if(info.duration>MAX_DURATION)throw new Error('too long');
+      return safeInfo(info,source);
+    }catch(fallbackError){
+      console.error('[tiktok:yt-dlp]',fallbackError?.message||fallbackError);
+      throw fallbackError;
+    }
   }
 }
 
