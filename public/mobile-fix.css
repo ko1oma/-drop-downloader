@@ -11,15 +11,15 @@
     overflow-x:hidden;
   }
 
-  /* Compact reference proportions: TikTok / Instagram / registration /
-     public-content. The columns scale together so every label remains
-     inside its own pill without making the pills huge. */
+  /* Social badges only.
+     Deliberately give each label the minimum practical width it needs.
+     The last badge absorbs the remaining phone width. */
   .trust{
     width:100%;
     min-width:0;
     margin:16px 0 22px;
     display:grid;
-    grid-template-columns:61fr 72fr 90fr 125fr;
+    grid-template-columns:64px 80px 105px minmax(0,1fr);
     gap:5px;
     align-items:center;
     overflow:visible;
@@ -30,7 +30,7 @@
     min-width:0;
     max-width:100%;
     height:31px;
-    padding:0 6px;
+    padding:0 5px;
     display:flex;
     align-items:center;
     justify-content:center;
@@ -38,18 +38,19 @@
     border-radius:999px;
     white-space:nowrap;
     overflow:hidden;
-    font-size:clamp(7px,2.05vw,8px);
+    font-size:8px;
     line-height:1;
-    letter-spacing:-.015em;
+    letter-spacing:-.025em;
   }
 
   .trust .badge-label{
+    display:block;
     min-width:0;
-    max-width:100%;
-    overflow:hidden;
+    max-width:none;
+    flex:0 1 auto;
+    overflow:visible;
     text-overflow:clip;
     white-space:nowrap;
-    flex:0 1 auto;
   }
 
   .trust .badge .ico{
@@ -64,8 +65,7 @@
     flex:0 0 10px;
   }
 
-  /* Preserve the page's existing compact sizing and prevent accidental
-     horizontal overflow elsewhere without changing component dimensions. */
+  /* Never allow the badge row itself to create page overflow. */
   .input-row,.meta,.step,.faq-list,.footer{
     min-width:0;
     max-width:100%;
@@ -87,5 +87,29 @@
   .footer>*{
     min-width:0;
     max-width:100%;
+  }
+}
+
+/* On narrower phones, keep all four pills compact while preserving complete
+   labels. The final pill automatically takes the remaining space. */
+@media (max-width:380px){
+  .trust{
+    grid-template-columns:59px 74px 96px minmax(0,1fr);
+    gap:4px;
+  }
+  .trust .badge{
+    padding-inline:4px;
+    gap:3px;
+    font-size:7.5px;
+  }
+  .trust .badge .ico{
+    width:11px;
+    height:11px;
+    flex-basis:11px;
+  }
+  .trust .badge .check{
+    width:9px;
+    height:9px;
+    flex-basis:9px;
   }
 }
