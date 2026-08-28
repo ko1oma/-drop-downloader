@@ -1,6 +1,6 @@
-/* Mobile-only correction for the social badges.
-   Keep the original compact page scale from index.html.
-   Only the social badge row is adjusted here. */
+/* Mobile badge sizing — content-first layout.
+   The badges are NOT equal-width. Each pill gets the width its complete
+   label actually needs; the final pill uses the remaining space. */
 @media (max-width:820px){
   *,*::before,*::after{box-sizing:border-box}
 
@@ -10,43 +10,44 @@
     overflow-x:hidden;
   }
 
-  /* Compact proportions based on the reference: short pills stay narrow,
-     while the longer labels receive proportionally more room. */
   .trust{
     width:100% !important;
     min-width:0 !important;
     max-width:100% !important;
     margin:16px 0 22px !important;
-    display:grid !important;
-    grid-template-columns:0.90fr 1.10fr 1.35fr 1.75fr !important;
+    display:flex !important;
+    flex-wrap:nowrap !important;
     gap:4px !important;
     align-items:center;
-    overflow:visible !important;
+    overflow:hidden !important;
   }
 
+  /* Width is determined by the content, not by four equal columns. */
   .trust .badge{
-    width:100% !important;
+    flex:0 0 auto !important;
+    width:max-content !important;
     min-width:0 !important;
-    max-width:100% !important;
+    max-width:none !important;
     height:29px !important;
-    padding:0 4px !important;
-    display:flex !important;
+    padding:0 6px !important;
+    display:inline-flex !important;
     align-items:center;
     justify-content:center;
     gap:3px !important;
     border-radius:999px;
     white-space:nowrap !important;
-    overflow:hidden !important;
+    overflow:visible !important;
     font-size:8px !important;
     line-height:1 !important;
-    letter-spacing:-.025em;
+    letter-spacing:-.035em !important;
   }
 
   .trust .badge-label{
-    display:block;
-    min-width:0 !important;
-    max-width:100% !important;
-    flex:0 1 auto !important;
+    display:inline-block !important;
+    width:auto !important;
+    min-width:max-content !important;
+    max-width:none !important;
+    flex:0 0 auto !important;
     overflow:visible !important;
     text-overflow:clip !important;
     white-space:nowrap !important;
@@ -64,7 +65,18 @@
     flex:0 0 10px !important;
   }
 
-  /* Prevent other page blocks from becoming wider than the phone. */
+  /* Give the long final badge the space it needs instead of clipping it. */
+  .trust .badge:last-child{
+    flex:1 1 auto !important;
+    width:auto !important;
+    min-width:0 !important;
+  }
+
+  .trust .badge:last-child .badge-label{
+    min-width:0 !important;
+  }
+
+  /* These blocks must never create horizontal page overflow. */
   .input-row,.meta,.step,.faq-list,.footer{
     min-width:0;
     max-width:100%;
@@ -89,18 +101,17 @@
   }
 }
 
-/* Slightly tighter proportions on very narrow phones. */
 @media (max-width:380px){
   .trust{
-    grid-template-columns:0.86fr 1.06fr 1.31fr 1.77fr !important;
     gap:3px !important;
   }
 
   .trust .badge{
     height:28px !important;
-    padding-inline:3px !important;
+    padding-inline:5px !important;
     gap:2px !important;
     font-size:7.5px !important;
+    letter-spacing:-.04em !important;
   }
 
   .trust .badge .ico{
