@@ -1,82 +1,19 @@
-import express from "express";
-import cors from "cors";
-import { spawn } from "node:child_process";
-import { mkdtemp, rm, readdir, stat } from "node:fs/promises";
-import { createReadStream } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import crypto from "node:crypto";
-
-const app = express();
-const PORT = Number(process.env.PORT || 10000);
-const HOST = "0.0.0.0";
-app.use(cors());
-app.use(express.json({ limit: "32kb" }));
-app.use(express.static("public"));
-
-const MAX_SECONDS = Number(process.env.MAX_MEDIA_SECONDS || 900);
-const allowed = (value) => {
-  try {
-    const u = new URL(value);
-    const h = u.hostname.toLowerCase();
-    return h === "tiktok.com" || h.endsWith(".tiktok.com") || h === "instagram.com" || h.endsWith(".instagram.com");
-  } catch { return false; }
-};
-
-function runYtdlp(args, cwd) {
-  return new Promise((resolve, reject) => {
-    const p = spawn("yt-dlp", args, { cwd });
-    let stdout = "", stderr = "";
-    p.stdout.on("data", d => stdout += d);
-    p.stderr.on("data", d => stderr += d);
-    p.on("error", reject);
-    p.on("close", code => code === 0 ? resolve(stdout) : reject(new Error(stderr.slice(-2500) || `yt-dlp exited ${code}`)));
-  });
-}
-
-app.get("/health", (_req, res) => res.json({ ok: true, service: "drop" }));
-
-app.post("/api/resolve", async (req, res) => {
-  const url = String(req.body?.url || "").trim();
-  if (!allowed(url)) return res.status(400).json({ error: "Only public TikTok and Instagram URLs are supported." });
-  const dir = await mkdtemp(path.join(os.tmpdir(), "drop-"));
-  try {
-    const raw = await runYtdlp(["--no-playlist", "--dump-single-json", "--no-warnings", "--skip-download", "--socket-timeout", "20", url], dir);
-    const info = JSON.parse(raw);
-    if (info.duration && Number(info.duration) > MAX_SECONDS) return res.status(400).json({ error: "This media is longer than the allowed limit." });
-    const title = info.title || info.id || "Media";
-    return res.json({ platform: info.extractor_key || info.extractor || "unknown", title, items: [{ title, url: `/api/download?url=${encodeURIComponent(url)}` }] });
-  } catch {
-    return res.status(502).json({ error: "The public media could not be resolved right now." });
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-});
-
-app.get("/api/download", async (req, res) => {
-  const url = String(req.query.url || "").trim();
-  if (!allowed(url)) return res.status(400).json({ error: "Unsupported URL." });
-  const dir = await mkdtemp(path.join(os.tmpdir(), "drop-download-"));
-  const id = crypto.randomBytes(8).toString("hex");
-  const output = path.join(dir, `${id}.%(ext)s`);
-  try {
-    await runYtdlp(["--no-playlist", "--no-warnings", "--restrict-filenames", "--max-filesize", "200M", "--merge-output-format", "mp4", "-o", output, url], dir);
-    const files = await readdir(dir);
-    const file = files.find(f => f.startsWith(id + "."));
-    if (!file) throw new Error("No output file");
-    const full = path.join(dir, file);
-    const info = await stat(full);
-    const ext = path.extname(file) || ".mp4";
-    res.setHeader("Content-Type", ext.toLowerCase() === ".mp4" ? "video/mp4" : "application/octet-stream");
-    res.setHeader("Content-Length", String(info.size));
-    res.setHeader("Content-Disposition", `attachment; filename="drop-${Date.now()}${ext}"`);
-    const stream = createReadStream(full);
-    const cleanup = () => rm(dir, { recursive: true, force: true }).catch(() => {});
-    stream.on("close", cleanup); stream.on("error", cleanup); stream.pipe(res);
-  } catch {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-    if (!res.headersSent) res.status(502).json({ error: "Download failed. The public media may be unavailable." });
-  }
-});
-
-app.listen(PORT, HOST, () => console.log(`Drop listening on ${HOST}:${PORT}`));
+import express from 'express';
+import cors from 'cors';
+import {spawn} from 'node:child_process';
+import {mkdtemp,rm,stat,readdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+const app=express();
+const PORT=Number(process.env.PORT||10000);
+const MAX_BYTES=200*1024*1024, MAX_DURATION=15*60;
+app.use(cors()); app.use(express.json({limit:'32kb'})); app.use(express.static('public'));
+function validUrl(value){try{const u=new URL(value),h=u.hostname.toLowerCase().replace(/^www\./,'');return u.protocol==='https:'&&(h==='tiktok.com'||h.endsWith('.tiktok.com')||h==='instagram.com'||h.endsWith('.instagram.com'));}catch{return false}}
+function ytdlp(args){return new Promise((resolve,reject)=>{const p=spawn('yt-dlp',args,{stdio:['ignore','pipe','pipe']});let out='',err='';p.stdout.on('data',d=>out+=d);p.stderr.on('data',d=>err+=d);p.on('error',reject);p.on('close',c=>c===0?resolve(out):reject(new Error(err.trim().split('\n').slice(-1)[0]||'media unavailable')));})}
+function name(s){return (s||'drop-media').replace(/[^a-z0-9._-]+/gi,'_').slice(0,80)||'drop-media'}
+app.get('/health',(q,r)=>r.json({ok:true,service:'drop'}));
+app.post('/api/resolve',async(q,r)=>{const url=String(q.body?.url||'').trim();if(!validUrl(url))return r.status(400).json({error:'Поддерживаются только HTTPS-ссылки TikTok и Instagram.'});try{const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--skip-download','--no-warnings',url]));if(info.duration>MAX_DURATION)return r.status(413).json({error:'Видео длиннее 15 минут не поддерживается.'});r.json({ok:true,title:info.title||'Media',thumbnail:info.thumbnail||null,type:info._type||'video'});}catch{r.status(422).json({error:'Не удалось получить публичное медиа. Проверьте ссылку и доступность публикации.'});}});
+app.get('/api/download',async(q,r)=>{const url=String(q.query.url||'').trim();if(!validUrl(url))return r.status(400).send('Invalid URL');const dir=await mkdtemp(path.join(tmpdir(),'drop-')),out=path.join(dir,crypto.randomUUID()+'.%(ext)s');try{const info=JSON.parse(await ytdlp(['--dump-single-json','--no-playlist','--no-warnings',url]));if(info.duration>MAX_DURATION)throw new Error('too long');await ytdlp(['--no-playlist','--no-warnings','-f','bv*+ba/b','--merge-output-format','mp4','-o',out,url]);const files=await readdir(dir),file=files.find(f=>!f.endsWith('.part'));if(!file)throw new Error('no file');const full=path.join(dir,file),s=await stat(full);if(s.size>MAX_BYTES)throw new Error('too large');r.download(full,name((info.title||'drop-media')+'.mp4'),async()=>rm(dir,{recursive:true,force:true}));}catch{await rm(dir,{recursive:true,force:true});if(!r.headersSent)r.status(422).send('Download unavailable');}});
+app.get('*',(q,r)=>r.sendFile(path.resolve('public/index.html')));
+app.listen(PORT,'0.0.0.0',()=>console.log('Drop listening on '+PORT));

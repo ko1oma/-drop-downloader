@@ -2,7 +2,6 @@ services:
   - type: web
     name: drop-downloader
     runtime: docker
-    repo: https://github.com/ko1oma/-drop-downloader
-    branch: main
+    plan: free
     healthCheckPath: /health
     autoDeploy: true
