@@ -6,6 +6,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 COPY . .
 RUN node patch-server.mjs
+RUN node patch-instagram.mjs
 ENV NODE_ENV=production
 ENV PORT=10000
 EXPOSE 10000
